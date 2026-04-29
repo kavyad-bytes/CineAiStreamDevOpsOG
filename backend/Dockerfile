@@ -10,6 +10,7 @@ RUN mvn clean package -DskipTests
 
 # Runtime stage
 FROM eclipse-temurin:21-jre
+LABEL org.opencontainers.image.source=https://github.com/kavyad-bytes/CineAiStreamDevOpsOG
 WORKDIR /app
 
 COPY --from=build /app/target/*.jar app.jar
