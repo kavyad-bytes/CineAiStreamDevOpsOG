@@ -15,11 +15,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -------------------------
+      # Checkout
+      # -------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # -------------------------
+      # Backend Build
+      # -------------------------
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
@@ -31,6 +37,9 @@ jobs:
           cd backend
           mvn clean package -DskipTests
 
+      # -------------------------
+      # Frontend Build
+      # -------------------------
       - name: Setup Node 20
         uses: actions/setup-node@v4
         with:
@@ -42,23 +51,35 @@ jobs:
           npm install
           npm run build
 
-      - name: Semgrep SAST Scan
+      # -------------------------
+      # SAST (Semgrep)
+      # -------------------------
+      - name: Semgrep Scan
         uses: semgrep/semgrep-action@v1
         continue-on-error: true
 
+      # -------------------------
+      # Docker Login (GHCR)
+      # -------------------------
       - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
 
+      # -------------------------
+      # Build Images (LOWERCASE FIX)
+      # -------------------------
       - name: Build Backend Image
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/cineai-backend:${{ github.sha }} ./backend
-          docker tag ghcr.io/${{ github.repository }}/cineai-backend:${{ github.sha }} ghcr.io/${{ github.repository }}/cineai-backend:latest
+          docker build -t ghcr.io/${{ github.repository_owner }}/cineai-backend:${{ github.sha }} ./backend
+          docker tag ghcr.io/${{ github.repository_owner }}/cineai-backend:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/cineai-backend:latest
 
       - name: Build Frontend Image
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/cineai-frontend:${{ github.sha }} ./frontend
-          docker tag ghcr.io/${{ github.repository }}/cineai-frontend:${{ github.sha }} ghcr.io/${{ github.repository }}/cineai-frontend:latest
+          docker build -t ghcr.io/${{ github.repository_owner }}/cineai-frontend:${{ github.sha }} ./frontend
+          docker tag ghcr.io/${{ github.repository_owner }}/cineai-frontend:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/cineai-frontend:latest
 
+      # -------------------------
+      # Install Trivy (NO VERSION ISSUE)
+      # -------------------------
       - name: Install Trivy
         run: |
           sudo apt-get update
@@ -68,26 +89,35 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
+      # -------------------------
+      # Image Scan
+      # -------------------------
       - name: Trivy Scan Backend
         run: |
-          trivy image --severity CRITICAL,HIGH --exit-code 0 ghcr.io/${{ github.repository }}/cineai-backend:${{ github.sha }}
+          trivy image --severity CRITICAL,HIGH --exit-code 0 ghcr.io/${{ github.repository_owner }}/cineai-backend:${{ github.sha }}
 
       - name: Trivy Scan Frontend
         run: |
-          trivy image --severity CRITICAL,HIGH --exit-code 0 ghcr.io/${{ github.repository }}/cineai-frontend:${{ github.sha }}
+          trivy image --severity CRITICAL,HIGH --exit-code 0 ghcr.io/${{ github.repository_owner }}/cineai-frontend:${{ github.sha }}
 
+      # -------------------------
+      # Push Images
+      # -------------------------
       - name: Push Images
         run: |
-          docker push ghcr.io/${{ github.repository }}/cineai-backend:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/cineai-backend:latest
-          docker push ghcr.io/${{ github.repository }}/cineai-frontend:${{ github.sha }}
-          docker push ghcr.io/${{ github.repository }}/cineai-frontend:latest
+          docker push ghcr.io/${{ github.repository_owner }}/cineai-backend:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository_owner }}/cineai-backend:latest
+          docker push ghcr.io/${{ github.repository_owner }}/cineai-frontend:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository_owner }}/cineai-frontend:latest
 
+      # -------------------------
+      # GitOps (Update K8s)
+      # -------------------------
       - name: Update Kubernetes Image Tags
         if: github.ref == 'refs/heads/main'
         run: |
-          sed -i "s|image: ghcr.io/${{ github.repository }}/cineai-backend:.*|image: ghcr.io/${{ github.repository }}/cineai-backend:${{ github.sha }}|g" k8s/backend/backend.yaml
-          sed -i "s|image: ghcr.io/${{ github.repository }}/cineai-frontend:.*|image: ghcr.io/${{ github.repository }}/cineai-frontend:${{ github.sha }}|g" k8s/frontend/frontend.yaml
+          sed -i "s|image: .*cineai-backend:.*|image: ghcr.io/${{ github.repository_owner }}/cineai-backend:${{ github.sha }}|g" k8s/backend/backend.yaml
+          sed -i "s|image: .*cineai-frontend:.*|image: ghcr.io/${{ github.repository_owner }}/cineai-frontend:${{ github.sha }}|g" k8s/frontend/frontend.yaml
 
       - name: Commit Updated Manifests
         if: github.ref == 'refs/heads/main'
@@ -98,6 +128,9 @@ jobs:
           git commit -m "update image tags to ${{ github.sha }}" || echo "No changes"
           git push
 
+      # -------------------------
+      # DAST (ZAP)
+      # -------------------------
       - name: OWASP ZAP Scan
         if: github.ref == 'refs/heads/main'
         uses: zaproxy/action-baseline@v0.14.0
