@@ -4,7 +4,6 @@ on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
 
 permissions:
   contents: write
@@ -16,28 +15,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -------------------------
+      # Checkout
+      # -------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # -------------------------
+      # Set image names (LOWERCASE SAFE)
+      # -------------------------
       - name: Set image names
         run: |
           echo "BACKEND_IMAGE=ghcr.io/${{ github.repository_owner }}/cineai-backend" >> $GITHUB_ENV
           echo "FRONTEND_IMAGE=ghcr.io/${{ github.repository_owner }}/cineai-frontend" >> $GITHUB_ENV
 
-      - name: Set up Java 21
+      # -------------------------
+      # Backend Build
+      # -------------------------
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: 21
+          java-version: "21"
+          distribution: "temurin"
 
       - name: Build backend
         working-directory: backend
         run: mvn clean package -DskipTests
 
-      - name: Set up Node 20
+      # -------------------------
+      # Frontend Build
+      # -------------------------
+      - name: Setup Node 20
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
 
       - name: Build frontend
         working-directory: frontend
@@ -45,12 +56,29 @@ jobs:
           npm install
           npm run build
 
-      - name: Run Semgrep SAST
+      # -------------------------
+      # SonarCloud (minimal)
+      # -------------------------
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=cineai
+            -Dsonar.sources=backend/src,frontend/src
+            -Dsonar.java.binaries=backend/target/classes
+
+      # -------------------------
+      # SAST
+      # -------------------------
+      - name: Semgrep SAST
         uses: semgrep/semgrep-action@v1
         continue-on-error: true
-        with:
-          config: auto
 
+      # -------------------------
+      # GHCR Login (PAT)
+      # -------------------------
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -58,100 +86,156 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_TOKEN }}
 
+      # -------------------------
+      # Build Images
+      # -------------------------
       - name: Build backend image
         run: |
-          docker build \
-            -t $BACKEND_IMAGE:${{ github.sha }} \
-            -t $BACKEND_IMAGE:latest \
-            ./backend
+          docker build -t $BACKEND_IMAGE:${{ github.sha }} ./backend
+          docker tag $BACKEND_IMAGE:${{ github.sha }} $BACKEND_IMAGE:latest
 
       - name: Build frontend image
         run: |
-          docker build \
-            -t $FRONTEND_IMAGE:${{ github.sha }} \
-            -t $FRONTEND_IMAGE:latest \
-            ./frontend
+          docker build -t $FRONTEND_IMAGE:${{ github.sha }} ./frontend
+          docker tag $FRONTEND_IMAGE:${{ github.sha }} $FRONTEND_IMAGE:latest
 
-      - name: Trivy scan backend image
-        uses: aquasecurity/trivy-action@master
-        continue-on-error: true
-        with:
-          image-ref: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          severity: CRITICAL,HIGH
-          exit-code: 0
+      # -------------------------
+      # Install Trivy (stable)
+      # -------------------------
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
 
-      - name: Trivy scan frontend image
-        uses: aquasecurity/trivy-action@master
-        continue-on-error: true
-        with:
-          image-ref: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          severity: CRITICAL,HIGH
-          exit-code: 0
+      # -------------------------
+      # Image Scan
+      # -------------------------
+      - name: Trivy Scan Backend
+        run: |
+          trivy image --severity CRITICAL,HIGH --exit-code 0 $BACKEND_IMAGE:${{ github.sha }}
 
+      - name: Trivy Scan Frontend
+        run: |
+          trivy image --severity CRITICAL,HIGH --exit-code 0 $FRONTEND_IMAGE:${{ github.sha }}
+
+      # -------------------------
+      # Push Images
+      # -------------------------
       - name: Push backend image
-        if: github.event_name == 'push'
         run: |
           docker push $BACKEND_IMAGE:${{ github.sha }}
           docker push $BACKEND_IMAGE:latest
 
       - name: Push frontend image
-        if: github.event_name == 'push'
         run: |
           docker push $FRONTEND_IMAGE:${{ github.sha }}
           docker push $FRONTEND_IMAGE:latest
 
+      # -------------------------
+      # GitOps update
+      # -------------------------
       - name: Update Kubernetes manifests
-        if: github.event_name == 'push'
+        if: github.ref == 'refs/heads/main'
         run: |
-          sed -i "s|image: .*cineai-backend:.*|image: $BACKEND_IMAGE:${{ github.sha }}|g" k8s/backend/backend.yml
-          sed -i "s|image: .*cineai-frontend:.*|image: $FRONTEND_IMAGE:${{ github.sha }}|g" k8s/frontend/frontend.yml
+          sed -i "s|image: .*cineai-backend:.*|image: $BACKEND_IMAGE:${{ github.sha }}|g" k8s/backend/backend.yaml
+          sed -i "s|image: .*cineai-frontend:.*|image: $FRONTEND_IMAGE:${{ github.sha }}|g" k8s/frontend/frontend.yaml
 
-      - name: Commit manifest changes
-        if: github.event_name == 'push'
+      - name: Commit changes
+        if: github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add k8s/backend/backend.yml k8s/frontend/frontend.yml
-          git commit -m "chore: update image tags [skip ci]" || echo "No manifest changes"
+          git add k8s/backend/backend.yaml k8s/frontend/frontend.yaml
+          git commit -m "update image tags ${{ github.sha }}" || echo "No changes"
           git push
 
+  # -------------------------
+  # DAST
+  # -------------------------
   zap-dast:
     runs-on: ubuntu-latest
     needs: build-test-scan
     if: always()
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Start app with Docker Compose
+      - name: Start app
         run: docker compose up -d --build
 
-      - name: Wait for frontend
+      - name: Wait for app
         run: |
           sleep 60
           curl -I http://localhost:5173
 
-      - name: OWASP ZAP Baseline Scan
+      - name: Run ZAP
         run: |
-          mkdir -p zap-output
-          chmod -R 777 zap-output
-
+          mkdir zap-output
           docker run --network host \
-            -v $(pwd)/zap-output:/zap/wrk/:rw \
+            -v $(pwd)/zap-output:/zap/wrk \
             zaproxy/zap-stable zap-baseline.py \
             -t http://localhost:5173 \
-            -r zap-report.html \
-            -w zap-report.md \
-            -J zap-report.json \
+            -r report.html \
             -I
 
-      - name: Upload ZAP report
+      - name: Upload report
         uses: actions/upload-artifact@v4
         with:
-          name: zap-security-report
+          name: zap-report
           path: zap-output
 
       - name: Stop app
         if: always()
         run: docker compose down
+
+  # -------------------------
+  # AI Summary
+  # -------------------------
+  ai-summary:
+    runs-on: ubuntu-latest
+    needs: [build-test-scan, zap-dast]
+    if: always()
+
+    steps:
+      - name: Generate DevSecOps AI Summary
+        run: |
+          cat <<EOF >> $GITHUB_STEP_SUMMARY
+          # CineAI DevSecOps AI Summary
+
+          ## Pipeline Result
+
+          | Stage | Status |
+          |------|--------|
+          | Build + SAST + Trivy + GitOps | ${{ needs.build-test-scan.result }} |
+          | OWASP ZAP DAST | ${{ needs.zap-dast.result }} |
+
+          ## Commit
+
+          \`${{ github.sha }}\`
+
+          ## Summary
+
+          The CineAI DevSecOps pipeline completed with the above results.
+
+          ### What was checked
+
+          - Backend Spring Boot build
+          - Frontend React build
+          - SonarCloud analysis
+          - Semgrep SAST scan
+          - Trivy container image scan
+          - GHCR Docker image push
+          - Kubernetes manifest update for ArgoCD
+          - OWASP ZAP DAST scan
+
+          ### Recommendation
+
+          Review failed or warning stages first.  
+          Check ZAP report artifact for web security findings.  
+          Check Trivy output for container CVEs.  
+          Check Semgrep output for code-level security issues.
+          EOF
