@@ -36,6 +36,7 @@ public class MovieController {
         return ResponseEntity.ok(movieService.uploadMovie(request, file));
     }
 
+    //Steam video
     @GetMapping("/stream/{id}")
     public ResponseEntity<InputStreamResource> streamMovie(@PathVariable Long id) {
         Movie movie = movieService.getMovieById(id);
