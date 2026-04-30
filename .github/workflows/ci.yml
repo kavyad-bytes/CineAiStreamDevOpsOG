@@ -60,11 +60,12 @@ jobs:
       # SonarCloud (minimal)
       # -------------------------
       - name: SonarCloud Scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
+            -Dsonar.organization=kavyad-bytes
             -Dsonar.projectKey=cineai
             -Dsonar.sources=backend/src,frontend/src
             -Dsonar.java.binaries=backend/target/classes
