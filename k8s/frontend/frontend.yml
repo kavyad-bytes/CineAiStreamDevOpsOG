@@ -29,6 +29,6 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: ghcr.io/kavyad-bytes/cineai-frontend:05381665d385289d475456acb37a65bae93d95ae
+          image: ghcr.io/kavyad-bytes/cineai-frontend:a3898f7278871d84e9814d65ae80ca7194dd73ad
           ports:
             - containerPort: 80

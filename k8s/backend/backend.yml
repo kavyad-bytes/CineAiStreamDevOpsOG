@@ -29,7 +29,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: ghcr.io/kavyad-bytes/cineai-backend:05381665d385289d475456acb37a65bae93d95ae
+          image: ghcr.io/kavyad-bytes/cineai-backend:a3898f7278871d84e9814d65ae80ca7194dd73ad
           ports:
             - containerPort: 8081
           env:
