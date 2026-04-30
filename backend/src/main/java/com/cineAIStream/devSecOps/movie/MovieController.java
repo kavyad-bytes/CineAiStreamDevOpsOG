@@ -27,6 +27,7 @@ public class MovieController {
         return ResponseEntity.ok(movieService.searchMovies(q));
     }
 
+    //upload
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<MovieResponse> uploadMovie(
